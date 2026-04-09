@@ -1,0 +1,34 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# Xcode
+build/
+DerivedData/
+*.xcodeproj/
+*.xcworkspace/
+!Package.swift
+
+# VS Code
+.vscode/
+
+# Build artifacts
+*.o
+*.a
+*.so
+*.dylib
+*.swiftdoc
+*.swiftmodule
+*.swiftsourceinfo
+
+# Local Environment
+.env
+.env.*
