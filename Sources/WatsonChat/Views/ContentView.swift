@@ -3,6 +3,7 @@ import SwiftUI
 struct ContentView: View {
     @Bindable var viewModel: ChatViewModel
     @State private var inputText: String = ""
+    @State private var generationTask: Task<Void, Never>?
     @FocusState private var isFocused: Bool
 
     var body: some View {
@@ -52,13 +53,22 @@ struct ContentView: View {
                             }
                         }
                     
-                    Button(action: sendMessage) {
-                        Image(systemName: "arrow.up.circle.fill")
-                            .font(.system(size: 28))
-                            .symbolRenderingMode(.hierarchical)
+                    if generationTask != nil {
+                        Button(action: stopGeneration) {
+                            Image(systemName: "stop.circle.fill")
+                                .font(.system(size: 28))
+                                .symbolRenderingMode(.hierarchical)
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        Button(action: sendMessage) {
+                            Image(systemName: "arrow.up.circle.fill")
+                                .font(.system(size: 28))
+                                .symbolRenderingMode(.hierarchical)
+                        }
+                        .disabled(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || viewModel.isGenerating)
+                        .buttonStyle(.plain)
                     }
-                    .disabled(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || viewModel.isGenerating)
-                    .buttonStyle(.plain)
                 }
                 .padding()
                 .background(.background)
@@ -99,6 +109,10 @@ struct ContentView: View {
                     }
                 }
             }
+            .onDisappear {
+                generationTask?.cancel()
+                generationTask = nil
+            }
         }
     }
     
@@ -106,7 +120,19 @@ struct ContentView: View {
         guard !inputText.isEmpty else { return }
         let text = inputText
         inputText = ""
-        Task { await viewModel.sendMessage(text) }
+        generationTask?.cancel()
+        generationTask = Task {
+            await viewModel.sendMessage(text)
+            await MainActor.run {
+                generationTask = nil
+            }
+        }
+    }
+
+    private func stopGeneration() {
+        viewModel.stopGeneration()
+        generationTask?.cancel()
+        generationTask = nil
     }
 }
 

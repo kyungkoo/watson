@@ -69,12 +69,15 @@ public final class ChatViewModel {
             )
             
             for try await token in stream {
+                try Task.checkCancellation()
                 if let index = messages.firstIndex(where: { $0.id == assistantID }) {
                     messages[index].content += token
                 }
             }
 
             statusMessage = "준비 완료"
+        } catch is CancellationError {
+            statusMessage = "생성 중지됨"
         } catch {
             if let index = messages.firstIndex(where: { $0.id == assistantID }) {
                 let errorMessage = "\n\n[오류]: \(error.localizedDescription)"
@@ -82,6 +85,12 @@ public final class ChatViewModel {
             }
 
             statusMessage = "생성 실패: \(error.localizedDescription)"
+        }
+    }
+
+    public func stopGeneration() {
+        if isGenerating {
+            statusMessage = "중지 요청 중..."
         }
     }
 
