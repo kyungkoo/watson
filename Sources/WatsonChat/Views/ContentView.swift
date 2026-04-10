@@ -1,6 +1,10 @@
 import SwiftUI
+import WatsonAppCore
+import WatsonDomain
 
 struct ContentView: View {
+    private static let typingIndicatorScrollID = "assistant-typing-indicator"
+
     @Bindable var viewModel: ChatViewModel
     @State private var inputText: String = ""
     @FocusState private var isFocused: Bool
@@ -28,12 +32,24 @@ struct ContentView: View {
                                     MessageBubbleView(message: message)
                                         .id(message.id)
                                 }
+
+                                if viewModel.isAwaitingAssistantResponse {
+                                    AssistantTypingIndicatorBubbleView()
+                                        .id(Self.typingIndicatorScrollID)
+                                }
                             }
                         }
                         .padding()
                     }
                     .onChange(of: viewModel.messages.last?.content) { _, _ in
                         if let lastID = viewModel.messages.last?.id {
+                            proxy.scrollTo(lastID, anchor: .bottom)
+                        }
+                    }
+                    .onChange(of: viewModel.isAwaitingAssistantResponse) { _, isAwaiting in
+                        if isAwaiting {
+                            proxy.scrollTo(Self.typingIndicatorScrollID, anchor: .bottom)
+                        } else if let lastID = viewModel.messages.last?.id {
                             proxy.scrollTo(lastID, anchor: .bottom)
                         }
                     }
@@ -101,12 +117,33 @@ struct ContentView: View {
                         viewModel.selectModel(newModel)
                     }
                 }
+
+                ToolbarItem(placement: .automatic) {
+                    Menu {
+                        Toggle("자동 라우팅", isOn: $viewModel.autoRoutingEnabled)
+                        Picker("라우팅 잠금", selection: $viewModel.routingLock) {
+                            Text("잠금 없음").tag(ModelRoutingLock.none)
+                            Text("E2B 고정").tag(ModelRoutingLock.forceE2B)
+                            Text("E4B 고정").tag(ModelRoutingLock.forceE4B)
+                        }
+                    } label: {
+                        Label("라우팅", systemImage: "arrow.triangle.branch")
+                    }
+                }
                 
                 if viewModel.isBusy {
                     ToolbarItem(placement: .primaryAction) {
                         ProgressView().controlSize(.small)
                     }
                 }
+            }
+            .onChange(of: viewModel.routingLock) { _, newLock in
+                guard viewModel.autoRoutingEnabled, let targetModel = newLock.targetModel else { return }
+                viewModel.selectModel(targetModel)
+            }
+            .onChange(of: viewModel.autoRoutingEnabled) { _, isEnabled in
+                guard isEnabled, let targetModel = viewModel.routingLock.targetModel else { return }
+                viewModel.selectModel(targetModel)
             }
             .onDisappear {
                 viewModel.cancelActiveTasks()
