@@ -1,5 +1,5 @@
 {
-  "originHash" : "472c30d955d0128803b5df49ea36854e2d87131412019d795929ae7c678eb4d7",
+  "originHash" : "55cc37a7e16e5a02a6fd02e104f1202d58f0a065eed2fed1840bd7a7e9ff0467",
   "pins" : [
     {
       "identity" : "mlx-swift",
@@ -25,6 +25,15 @@
       "state" : {
         "revision" : "9f542610331815e29cc3821d3b6f488db8715517",
         "version" : "1.6.0"
+      }
+    },
+    {
+      "identity" : "swift-collections",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-collections.git",
+      "state" : {
+        "revision" : "6675bc0ff86e61436e615df6fc5174e043e57924",
+        "version" : "1.4.1"
       }
     },
     {
@@ -61,6 +70,15 @@
       "state" : {
         "branch" : "main",
         "revision" : "cad9046c590bd6648ef8dba0a5b62c2b61007cf4"
+      }
+    },
+    {
+      "identity" : "swift-jinja",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/huggingface/swift-jinja.git",
+      "state" : {
+        "revision" : "0aeefadec459ce8e11a333769950fb86183aca43",
+        "version" : "2.3.5"
       }
     },
     {
@@ -115,6 +133,15 @@
       "state" : {
         "revision" : "d6ace41073825e04fc7a8441ab4613afcf7fd32f",
         "version" : "0.1.1"
+      }
+    },
+    {
+      "identity" : "yyjson",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/ibireme/yyjson.git",
+      "state" : {
+        "revision" : "8b4a38dc994a110abaec8a400615567bd996105f",
+        "version" : "0.12.0"
       }
     }
   ],

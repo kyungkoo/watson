@@ -1,30 +1,7 @@
 import Foundation
+import WatsonDomain
 
-public enum InferenceProviderError: LocalizedError {
-    case unsupportedConfiguration(ModelConfiguration)
-    case unsupportedPromptFormat(PromptFormat)
-    case modelNotLoaded
-
-    public var errorDescription: String? {
-        switch self {
-        case .unsupportedConfiguration(let config):
-            return "\(config.id)은(는) 현재 선택된 provider에서 지원되지 않습니다."
-        case .unsupportedPromptFormat(let format):
-            return "지원되지 않는 프롬프트 형식입니다: \(String(describing: format))"
-        case .modelNotLoaded:
-            return "모델이 아직 로드되지 않았습니다."
-        }
-    }
-}
-
-public protocol InferenceProvider: Sendable {
-    func supports(config: ModelConfiguration) -> Bool
-    func loadModel(config: ModelConfiguration) async throws
-    func generate(messages: [ChatMessage], maxTokens: Int) async throws -> AsyncThrowingStream<String, Error>
-    func unload() async
-}
-
-public enum InferenceProviderFactory {
+public enum MLXProviderFactory {
     public static func makeProvider(for kind: ProviderKind) -> any InferenceProvider {
         switch kind {
         case .mlxNative:
@@ -54,7 +31,7 @@ public actor MLXNativeInferenceProvider: InferenceProvider {
 
     public func generate(
         messages: [ChatMessage],
-        maxTokens: Int
+        options: GenerationOptions
     ) async throws -> AsyncThrowingStream<String, Error> {
         guard let loadedConfiguration else {
             throw InferenceProviderError.modelNotLoaded
@@ -63,12 +40,12 @@ public actor MLXNativeInferenceProvider: InferenceProvider {
         let prompt: String
         switch loadedConfiguration.format {
         case .gemma4:
-            prompt = PromptFormatter.formatGemma(messages: messages)
+            prompt = PromptFormatter.formatGemma(messages: messages, options: options.promptOptions)
         case .llama3:
             throw InferenceProviderError.unsupportedPromptFormat(loadedConfiguration.format)
         }
 
-        return await engine.generate(prompt: prompt, maxTokens: maxTokens)
+        return await engine.generate(prompt: prompt, options: options)
     }
 
     public func unload() async {

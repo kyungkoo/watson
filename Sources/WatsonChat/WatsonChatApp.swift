@@ -1,8 +1,10 @@
 import SwiftUI
+import WatsonAppCore
+import WatsonMLX
 
 @main
 struct WatsonChatApp: App {
-    @State private var viewModel = ChatViewModel()
+    @State private var viewModel = ChatViewModel(providerFactory: MLXProviderFactory.makeProvider)
 
     var body: some Scene {
         WindowGroup {

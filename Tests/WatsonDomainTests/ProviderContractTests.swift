@@ -1,5 +1,5 @@
 import XCTest
-@testable import WatsonChat
+@testable import WatsonDomain
 
 final class ProviderContractTests: XCTestCase {
     func test_gemmaModels_expressExplicitProviderSelectionIntent() {
@@ -92,16 +92,34 @@ final class ProviderContractTests: XCTestCase {
 
         XCTAssertEqual(tokens, ["token-1", "token-2", "token-3"])
 
-        let afterGenerateState = await provider.state()
-        XCTAssertEqual(afterGenerateState.lifecycle, ["load", "generate"])
-        XCTAssertEqual(afterGenerateState.loadedConfiguration, supportedConfiguration)
-        XCTAssertEqual(afterGenerateState.lastGeneratedMessages, messages)
-        XCTAssertEqual(afterGenerateState.lastGeneratedMaxTokens, 3)
+        let afterDefaultGenerateState = await provider.state()
+        XCTAssertEqual(afterDefaultGenerateState.lifecycle, ["load", "generate"])
+        XCTAssertEqual(afterDefaultGenerateState.loadedConfiguration, supportedConfiguration)
+        XCTAssertEqual(afterDefaultGenerateState.lastGeneratedMessages, messages)
+        XCTAssertEqual(afterDefaultGenerateState.lastGeneratedMaxTokens, 3)
+        XCTAssertEqual(afterDefaultGenerateState.lastGenerationOptions?.temperature, 0.0)
+        XCTAssertEqual(afterDefaultGenerateState.lastGenerationOptions?.topP, 1.0)
+        XCTAssertEqual(afterDefaultGenerateState.lastGenerationOptions?.repetitionPenalty, 1.0)
+
+        let customOptions = GenerationOptions(
+            maxTokens: 2,
+            temperature: 0.35,
+            topP: 0.88,
+            repetitionPenalty: 1.12
+        )
+        let customStream = try await provider.generate(messages: messages, options: customOptions)
+        let customTokens = try await collectTokens(from: customStream)
+        XCTAssertEqual(customTokens, ["token-1", "token-2"])
+
+        let afterCustomGenerateState = await provider.state()
+        XCTAssertEqual(afterCustomGenerateState.lifecycle, ["load", "generate", "generate"])
+        XCTAssertEqual(afterCustomGenerateState.lastGeneratedMaxTokens, 2)
+        XCTAssertEqual(afterCustomGenerateState.lastGenerationOptions, customOptions)
 
         await provider.unload()
 
         let afterUnloadState = await provider.state()
-        XCTAssertEqual(afterUnloadState.lifecycle, ["load", "generate", "unload"])
+        XCTAssertEqual(afterUnloadState.lifecycle, ["load", "generate", "generate", "unload"])
         XCTAssertNil(afterUnloadState.loadedConfiguration)
 
         do {
@@ -122,6 +140,7 @@ private actor MockInferenceProvider: InferenceProvider {
     private var loadedConfiguration: ModelConfiguration?
     private var lastGeneratedMessages: [ChatMessage] = []
     private var lastGeneratedMaxTokens: Int?
+    private var lastGenerationOptions: GenerationOptions?
 
     nonisolated func supports(config: ModelConfiguration) -> Bool {
         config.providerKind == .mlxNative && config.format == .gemma4
@@ -138,7 +157,7 @@ private actor MockInferenceProvider: InferenceProvider {
 
     func generate(
         messages: [ChatMessage],
-        maxTokens: Int
+        options: GenerationOptions
     ) async throws -> AsyncThrowingStream<String, Error> {
         guard loadedConfiguration != nil else {
             throw InferenceProviderError.modelNotLoaded
@@ -146,10 +165,11 @@ private actor MockInferenceProvider: InferenceProvider {
 
         lifecycle.append("generate")
         lastGeneratedMessages = messages
-        lastGeneratedMaxTokens = maxTokens
+        lastGeneratedMaxTokens = options.maxTokens
+        lastGenerationOptions = options
 
         return AsyncThrowingStream { continuation in
-            for tokenIndex in 1...maxTokens {
+            for tokenIndex in 1...options.maxTokens {
                 continuation.yield("token-\(tokenIndex)")
             }
             continuation.finish()
@@ -166,7 +186,8 @@ private actor MockInferenceProvider: InferenceProvider {
             lifecycle: lifecycle,
             loadedConfiguration: loadedConfiguration,
             lastGeneratedMessages: lastGeneratedMessages,
-            lastGeneratedMaxTokens: lastGeneratedMaxTokens
+            lastGeneratedMaxTokens: lastGeneratedMaxTokens,
+            lastGenerationOptions: lastGenerationOptions
         )
     }
 
@@ -175,6 +196,7 @@ private actor MockInferenceProvider: InferenceProvider {
         let loadedConfiguration: ModelConfiguration?
         let lastGeneratedMessages: [ChatMessage]
         let lastGeneratedMaxTokens: Int?
+        let lastGenerationOptions: GenerationOptions?
     }
 }
 

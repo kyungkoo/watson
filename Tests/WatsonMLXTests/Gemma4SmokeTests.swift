@@ -1,5 +1,6 @@
 import XCTest
-@testable import WatsonChat
+import WatsonDomain
+@testable import WatsonMLX
 
 final class Gemma4SmokeTests: XCTestCase {
     func test_gemma4E2B_loadsAndGeneratesShortKoreanText() async throws {

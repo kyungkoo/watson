@@ -4,6 +4,7 @@ import MLXNN
 import MLXLMHFAPI
 import MLXLMTokenizers
 import MLXLMCommon
+import WatsonDomain
 
 public enum MLXError: LocalizedError {
     case modelNotLoaded
@@ -11,7 +12,7 @@ public enum MLXError: LocalizedError {
     case generationError(String)
     case memoryError
     case invalidPrompt
-    case unsupportedConfiguration(ModelConfiguration)
+    case unsupportedConfiguration(WatsonDomain.ModelConfiguration)
     case unsupportedMultimodal(String)
 
     public var errorDescription: String? {
@@ -49,11 +50,11 @@ public actor MLXEngine {
         Memory.cacheLimit = 1024 * 1024 * 512
     }
 
-    public nonisolated func supports(config: ModelConfiguration) -> Bool {
+    public nonisolated func supports(config: WatsonDomain.ModelConfiguration) -> Bool {
         config.providerKind == .mlxNative && config.format == .gemma4
     }
 
-    public func loadModel(config: ModelConfiguration) async throws {
+    public func loadModel(config: WatsonDomain.ModelConfiguration) async throws {
         guard supports(config: config) else {
             throw MLXError.unsupportedConfiguration(config)
         }
@@ -86,10 +87,10 @@ public actor MLXEngine {
         }
     }
 
-    public func generate(prompt: String, maxTokens: Int) -> AsyncThrowingStream<String, Error> {
+    public func generate(prompt: String, options: GenerationOptions) -> AsyncThrowingStream<String, Error> {
         generator.generate(
             prompt: prompt,
-            maxTokens: maxTokens,
+            options: options,
             isLoaded: isLoaded,
             model: model,
             tokenizer: tokenizer,

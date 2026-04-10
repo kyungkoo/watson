@@ -1,5 +1,5 @@
 import XCTest
-@testable import WatsonChat
+@testable import WatsonMLX
 
 final class Gemma4ConfigurationTests: XCTestCase {
     func test_decodesGemma4RootConfigurationTextConfigFields() throws {
