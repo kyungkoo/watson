@@ -3,6 +3,7 @@ import SwiftUI
 struct ContentView: View {
     @Bindable var viewModel: ChatViewModel
     @State private var inputText: String = ""
+    @FocusState private var isFocused: Bool
 
     var body: some View {
         NavigationSplitView {
@@ -19,9 +20,14 @@ struct ContentView: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(spacing: 16) {
-                            ForEach(viewModel.messages) { message in
-                                MessageBubbleView(message: message)
-                                    .id(message.id)
+                            if viewModel.messages.isEmpty {
+                                ContentUnavailableView("Gemma와 대화를 시작하세요", systemImage: "sparkles", description: Text("질문을 입력하고 Enter를 누르세요."))
+                                    .padding(.top, 100)
+                            } else {
+                                ForEach(viewModel.messages) { message in
+                                    MessageBubbleView(message: message)
+                                        .id(message.id)
+                                }
                             }
                         }
                         .padding()
@@ -36,24 +42,44 @@ struct ContentView: View {
                 Divider()
                 
                 // 입력 바
-                HStack(alignment: .bottom) {
-                    TextField("Gemma 4에게 질문하기...", text: $inputText, axis: .vertical)
+                HStack(alignment: .center, spacing: 12) {
+                    TextField("메시지를 입력하세요...", text: $inputText)
                         .textFieldStyle(.roundedBorder)
-                        .lineLimit(1...10)
-                        .onSubmit { sendMessage() }
+                        .focused($isFocused)
+                        .onSubmit {
+                            if !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !viewModel.isGenerating {
+                                sendMessage()
+                            }
+                        }
                     
                     Button(action: sendMessage) {
-                        Image(systemName: "paperplane.fill")
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: 28))
                             .symbolRenderingMode(.hierarchical)
                     }
-                    .disabled(inputText.isEmpty || viewModel.isGenerating)
-                    .buttonStyle(.borderedProminent)
-                    .padding(.bottom, 2)
+                    .disabled(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || viewModel.isGenerating)
+                    .buttonStyle(.plain)
                 }
                 .padding()
+                .background(.background)
             }
             .navigationTitle(viewModel.currentModel.id)
             .subtitle(viewModel.statusMessage)
+            .onAppear {
+                // 앱이 화면에 뜰 때 터미널로부터 포커스를 가로채고 정규 앱으로 승격
+                #if os(macOS)
+                NSApp.setActivationPolicy(.regular)
+                NSApplication.shared.activate(ignoringOtherApps: true)
+                for window in NSApp.windows {
+                    window.makeKeyAndOrderFront(nil)
+                }
+                #endif
+                
+                // 텍스트 필드에 포커스 부여
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    isFocused = true
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .principal) {
                     Picker("모델 선택", selection: $viewModel.currentModel) {

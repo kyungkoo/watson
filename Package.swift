@@ -1,16 +1,18 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 5.10
 import PackageDescription
 
 let package = Package(
     name: "WatsonChat",
     platforms: [
-        .macOS("15.0") // 현재 실제 SDK 상한선을 고려하여 15.0(Sequoia) 이상으로 설정하되, 요구하신 Tahoe 환경을 타겟팅합니다.
+        .macOS("15.0")
     ],
     products: [
         .executable(name: "WatsonChat", targets: ["WatsonChat"])
     ],
     dependencies: [
-        .package(url: "https://github.com/ml-explore/mlx-swift.git", branch: "main")
+        .package(url: "https://github.com/ml-explore/mlx-swift.git", branch: "main"),
+        .package(url: "https://github.com/DePasqualeOrg/swift-tokenizers-mlx.git", branch: "main"),
+        .package(url: "https://github.com/DePasqualeOrg/swift-hf-api-mlx.git", branch: "main")
     ],
     targets: [
         .executableTarget(
@@ -18,9 +20,16 @@ let package = Package(
             dependencies: [
                 .product(name: "MLX", package: "mlx-swift"),
                 .product(name: "MLXRandom", package: "mlx-swift"),
-                .product(name: "MLXNN", package: "mlx-swift")
+                .product(name: "MLXNN", package: "mlx-swift"),
+                .product(name: "MLXLMTokenizers", package: "swift-tokenizers-mlx"),
+                .product(name: "MLXLMHFAPI", package: "swift-hf-api-mlx")
             ],
             path: "Sources/WatsonChat"
+        ),
+        .testTarget(
+            name: "WatsonChatTests",
+            dependencies: ["WatsonChat"],
+            path: "Tests/WatsonChatTests"
         )
     ]
 )
