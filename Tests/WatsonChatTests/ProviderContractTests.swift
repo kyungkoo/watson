@@ -5,8 +5,34 @@ final class ProviderContractTests: XCTestCase {
     func test_gemmaModels_expressExplicitProviderSelectionIntent() {
         XCTAssertEqual(ModelConfiguration.gemma4_E2B.providerKind, .mlxNative)
         XCTAssertEqual(ModelConfiguration.gemma4_E4B.providerKind, .mlxNative)
+        XCTAssertEqual(ModelConfiguration.gemma4_26B_A4B.providerKind, .mlxNative)
+
         XCTAssertEqual(ModelConfiguration.gemma4_E2B.format, .gemma4)
         XCTAssertEqual(ModelConfiguration.gemma4_E4B.format, .gemma4)
+        XCTAssertEqual(ModelConfiguration.gemma4_26B_A4B.format, .gemma4)
+
+        XCTAssertEqual(ModelConfiguration.gemma4_E2B.architecture, .dense)
+        XCTAssertEqual(ModelConfiguration.gemma4_E4B.architecture, .dense)
+        XCTAssertEqual(ModelConfiguration.gemma4_26B_A4B.architecture, .moe)
+
+        XCTAssertEqual(ModelConfiguration.gemma4_E2B.quantizationHint, .none)
+        XCTAssertEqual(ModelConfiguration.gemma4_E4B.quantizationHint, .none)
+        XCTAssertEqual(ModelConfiguration.gemma4_26B_A4B.quantizationHint, .a4b)
+
+        XCTAssertEqual(ModelConfiguration.gemma4_E2B.recommendedContextWindow, 131_072)
+        XCTAssertEqual(ModelConfiguration.gemma4_E4B.recommendedContextWindow, 131_072)
+        XCTAssertEqual(ModelConfiguration.gemma4_26B_A4B.recommendedContextWindow, 262_144)
+    }
+
+    func test_availableModels_includesGemma426BA4BEntry() {
+        XCTAssertEqual(
+            ModelConfiguration.availableModels.map(\.id),
+            [
+                "Gemma 4 E2B",
+                "Gemma 4 E4B",
+                "Gemma 4 26B A4B"
+            ]
+        )
     }
 
     func test_mockProvider_supportsLoadGenerateAndUnloadContract() async throws {
@@ -16,6 +42,9 @@ final class ProviderContractTests: XCTestCase {
             modelPathOrID: "local/fixture",
             providerKind: .mlxNative,
             format: .gemma4,
+            architecture: .dense,
+            quantizationHint: .none,
+            recommendedContextWindow: 131_072,
             maxTokens: 3
         )
         let unsupportedConfiguration = ModelConfiguration(
@@ -23,6 +52,9 @@ final class ProviderContractTests: XCTestCase {
             modelPathOrID: "local/fixture",
             providerKind: .mlxNative,
             format: .llama3,
+            architecture: .dense,
+            quantizationHint: .none,
+            recommendedContextWindow: 131_072,
             maxTokens: 3
         )
 

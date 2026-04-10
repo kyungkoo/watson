@@ -65,6 +65,47 @@ final class Gemma4ConfigurationTests: XCTestCase {
         XCTAssertEqual(textConfiguration.finalLogitSoftcapping ?? 0, 30.0, accuracy: 0.0001)
     }
 
+    func test_decodesGemma4MoETextConfigFields() throws {
+        let json = """
+        {
+          "model_type": "gemma4",
+          "text_config": {
+            "model_type": "gemma4_text",
+            "hidden_size": 2816,
+            "intermediate_size": 2112,
+            "num_hidden_layers": 30,
+            "num_attention_heads": 16,
+            "num_key_value_heads": 8,
+            "head_dim": 256,
+            "hidden_activation": "gelu_pytorch_tanh",
+            "max_position_embeddings": 262144,
+            "rms_norm_eps": 1e-06,
+            "vocab_size": 262144,
+            "sliding_window": 1024,
+            "layer_types": [
+              "sliding_attention",
+              "full_attention"
+            ],
+            "enable_moe_block": true,
+            "num_experts": 128,
+            "top_k_experts": 8,
+            "moe_intermediate_size": 704
+          }
+        }
+        """
+
+        let rootConfiguration = try JSONDecoder().decode(
+            Gemma4RootConfiguration.self,
+            from: Data(json.utf8)
+        )
+        let textConfiguration = rootConfiguration.textConfig
+
+        XCTAssertTrue(textConfiguration.enableMoeBlock)
+        XCTAssertEqual(textConfiguration.numExperts, 128)
+        XCTAssertEqual(textConfiguration.topKExperts, 8)
+        XCTAssertEqual(textConfiguration.moeIntermediateSize, 704)
+    }
+
     func test_languageModelKeyShapes_filtersOutNonLanguageModelEntries() throws {
         let json = """
         {

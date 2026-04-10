@@ -3,7 +3,6 @@ import SwiftUI
 struct ContentView: View {
     @Bindable var viewModel: ChatViewModel
     @State private var inputText: String = ""
-    @State private var generationTask: Task<Void, Never>?
     @FocusState private var isFocused: Bool
 
     var body: some View {
@@ -48,12 +47,12 @@ struct ContentView: View {
                         .textFieldStyle(.roundedBorder)
                         .focused($isFocused)
                         .onSubmit {
-                            if !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !viewModel.isGenerating {
+                            if !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !viewModel.isBusy {
                                 sendMessage()
                             }
                         }
                     
-                    if generationTask != nil {
+                    if viewModel.showsStopButton {
                         Button(action: stopGeneration) {
                             Image(systemName: "stop.circle.fill")
                                 .font(.system(size: 28))
@@ -66,7 +65,7 @@ struct ContentView: View {
                                 .font(.system(size: 28))
                                 .symbolRenderingMode(.hierarchical)
                         }
-                        .disabled(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || viewModel.isGenerating)
+                        .disabled(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || viewModel.isBusy)
                         .buttonStyle(.plain)
                     }
                 }
@@ -99,19 +98,18 @@ struct ContentView: View {
                     }
                     .pickerStyle(.menu)
                     .onChange(of: viewModel.currentModel) { _, newModel in
-                        Task { await viewModel.switchModel(to: newModel) }
+                        viewModel.selectModel(newModel)
                     }
                 }
                 
-                if viewModel.isGenerating {
+                if viewModel.isBusy {
                     ToolbarItem(placement: .primaryAction) {
                         ProgressView().controlSize(.small)
                     }
                 }
             }
             .onDisappear {
-                generationTask?.cancel()
-                generationTask = nil
+                viewModel.cancelActiveTasks()
             }
         }
     }
@@ -120,19 +118,11 @@ struct ContentView: View {
         guard !inputText.isEmpty else { return }
         let text = inputText
         inputText = ""
-        generationTask?.cancel()
-        generationTask = Task {
-            await viewModel.sendMessage(text)
-            await MainActor.run {
-                generationTask = nil
-            }
-        }
+        viewModel.submitMessage(text)
     }
 
     private func stopGeneration() {
         viewModel.stopGeneration()
-        generationTask?.cancel()
-        generationTask = nil
     }
 }
 

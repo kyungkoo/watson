@@ -44,6 +44,10 @@ public struct Gemma4TextConfiguration: Codable, Sendable {
     public let layerTypes: [String]
     public let hiddenSizePerLayerInput: Int
     public let numKVSharedLayers: Int
+    public let enableMoeBlock: Bool
+    public let numExperts: Int
+    public let topKExperts: Int
+    public let moeIntermediateSize: Int
     public let useDoubleWideMLP: Bool
     public let finalLogitSoftcapping: Float?
     let ropeParameters: [String: Gemma4RoPEConfiguration]
@@ -70,6 +74,10 @@ public struct Gemma4TextConfiguration: Codable, Sendable {
         case layerTypes = "layer_types"
         case hiddenSizePerLayerInput = "hidden_size_per_layer_input"
         case numKVSharedLayers = "num_kv_shared_layers"
+        case enableMoeBlock = "enable_moe_block"
+        case numExperts = "num_experts"
+        case topKExperts = "top_k_experts"
+        case moeIntermediateSize = "moe_intermediate_size"
         case useDoubleWideMLP = "use_double_wide_mlp"
         case finalLogitSoftcapping = "final_logit_softcapping"
         case ropeParameters = "rope_parameters"
@@ -112,6 +120,11 @@ public struct Gemma4TextConfiguration: Codable, Sendable {
         hiddenSizePerLayerInput =
             try container.decodeIfPresent(Int.self, forKey: .hiddenSizePerLayerInput) ?? 256
         numKVSharedLayers = try container.decodeIfPresent(Int.self, forKey: .numKVSharedLayers) ?? 0
+        enableMoeBlock = try container.decodeIfPresent(Bool.self, forKey: .enableMoeBlock) ?? false
+        numExperts = try container.decodeIfPresent(Int.self, forKey: .numExperts) ?? (enableMoeBlock ? 1 : 0)
+        topKExperts = try container.decodeIfPresent(Int.self, forKey: .topKExperts) ?? (enableMoeBlock ? 1 : 0)
+        moeIntermediateSize =
+            try container.decodeIfPresent(Int.self, forKey: .moeIntermediateSize) ?? intermediateSize
         useDoubleWideMLP = try container.decodeIfPresent(Bool.self, forKey: .useDoubleWideMLP) ?? false
         finalLogitSoftcapping =
             try container.decodeIfPresent(Float.self, forKey: .finalLogitSoftcapping)
@@ -464,16 +477,129 @@ final class Gemma4TextMLP: Module {
     }
 }
 
+final class Gemma4TextRouter: Module {
+    private let numExperts: Int
+    private let topKExperts: Int
+    private let scalarRootSize: Float
+
+    @ModuleInfo(key: "norm") var norm: Gemma4RMSNormNoScale
+    @ModuleInfo(key: "proj") var proj: Linear
+    @ParameterInfo(key: "scale") var scale: MLXArray
+    @ParameterInfo(key: "per_expert_scale") var perExpertScale: MLXArray
+
+    init(_ config: Gemma4TextConfiguration) {
+        self.numExperts = max(config.numExperts, 1)
+        self.topKExperts = max(1, min(config.topKExperts, numExperts))
+        self.scalarRootSize = pow(Float(config.hiddenSize), -0.5)
+
+        self._norm.wrappedValue = Gemma4RMSNormNoScale(eps: config.rmsNormEps)
+        self._proj.wrappedValue = Linear(config.hiddenSize, numExperts, bias: false)
+        self._scale.wrappedValue = MLXArray.ones([config.hiddenSize], dtype: .float32)
+        self._perExpertScale.wrappedValue = MLXArray.ones([numExperts], dtype: .float32)
+
+        super.init()
+    }
+
+    func callAsFunction(_ hiddenStates: MLXArray) -> (
+        routerProbabilities: MLXArray,
+        topKWeights: MLXArray,
+        topKIndex: MLXArray
+    ) {
+        var hiddenStates = norm(hiddenStates)
+        hiddenStates = hiddenStates * scale.asType(hiddenStates.dtype) * scalarRootSize
+
+        let expertScores = proj(hiddenStates)
+        let routerProbabilities = softmax(expertScores.asType(.float32), axis: -1)
+
+        let topKIndex = argPartition(-routerProbabilities, kth: topKExperts - 1, axis: -1)[
+            .ellipsis, ..<topKExperts
+        ]
+        var topKWeights = takeAlong(routerProbabilities, topKIndex, axis: -1)
+        topKWeights = topKWeights / (topKWeights.sum(axis: -1, keepDims: true) + 1e-20)
+        topKWeights = topKWeights * perExpertScale[topKIndex].asType(topKWeights.dtype)
+
+        return (routerProbabilities, topKWeights, topKIndex)
+    }
+}
+
+final class Gemma4TextExperts: Module {
+    private let numExperts: Int
+    private let hiddenSize: Int
+    private let intermediateSize: Int
+    private let activationName: String
+
+    @ParameterInfo(key: "gate_up_proj") var gateUpProj: MLXArray
+    @ParameterInfo(key: "down_proj") var downProj: MLXArray
+
+    init(_ config: Gemma4TextConfiguration) {
+        self.numExperts = max(config.numExperts, 1)
+        self.hiddenSize = config.hiddenSize
+        self.intermediateSize = max(config.moeIntermediateSize, 1)
+        self.activationName = config.hiddenActivation
+
+        self._gateUpProj.wrappedValue = MLXArray.zeros(
+            [numExperts, 2 * intermediateSize, hiddenSize],
+            dtype: .float32
+        )
+        self._downProj.wrappedValue = MLXArray.zeros(
+            [numExperts, hiddenSize, intermediateSize],
+            dtype: .float32
+        )
+
+        super.init()
+    }
+
+    func callAsFunction(
+        _ hiddenStates: MLXArray,
+        topKIndex: MLXArray,
+        topKWeights: MLXArray
+    ) -> MLXArray {
+        var combined = MLXArray.zeros([hiddenStates.dim(0), hiddenSize], dtype: hiddenStates.dtype)
+        let routingWeights = topKWeights.asType(hiddenStates.dtype)
+
+        for expertIndex in 0 ..< numExperts {
+            let gateUpWeight = gateUpProj[expertIndex, 0..., 0...].asType(hiddenStates.dtype)
+            let downWeight = downProj[expertIndex, 0..., 0...].asType(hiddenStates.dtype)
+
+            let projected = matmul(hiddenStates, gateUpWeight.transposed())
+            let gate = projected[0..., ..<intermediateSize]
+            let up = projected[0..., intermediateSize...]
+
+            let expertOutput = matmul(
+                Gemma4TextMath.activation(activationName, gate) * up,
+                downWeight.transposed()
+            )
+            let expertMask = (topKIndex .== MLXArray(expertIndex)).asType(hiddenStates.dtype)
+            let expertRouting = (expertMask * routingWeights).sum(axis: -1, keepDims: true)
+
+            combined = combined + expertOutput * expertRouting
+        }
+
+        return combined
+    }
+}
+
+private enum Gemma4TextFeedForwardPath {
+    case dense
+    case mixtureOfExperts
+}
+
 final class Gemma4TextDecoderLayer: Module {
     private let activationName: String
+    private let feedForwardPath: Gemma4TextFeedForwardPath
     private let usesPerLayerInput: Bool
 
     @ModuleInfo(key: "self_attn") var selfAttention: Gemma4TextAttention
     @ModuleInfo var mlp: Gemma4TextMLP
+    @ModuleInfo(key: "router") var router: Gemma4TextRouter?
+    @ModuleInfo(key: "experts") var experts: Gemma4TextExperts?
     @ModuleInfo(key: "input_layernorm") var inputLayerNorm: RMSNorm
     @ModuleInfo(key: "post_attention_layernorm") var postAttentionLayerNorm: RMSNorm
     @ModuleInfo(key: "pre_feedforward_layernorm") var preFeedforwardLayerNorm: RMSNorm
     @ModuleInfo(key: "post_feedforward_layernorm") var postFeedforwardLayerNorm: RMSNorm
+    @ModuleInfo(key: "post_feedforward_layernorm_1") var postFeedforwardLayerNorm1: RMSNorm?
+    @ModuleInfo(key: "post_feedforward_layernorm_2") var postFeedforwardLayerNorm2: RMSNorm?
+    @ModuleInfo(key: "pre_feedforward_layernorm_2") var preFeedforwardLayerNorm2: RMSNorm?
     @ModuleInfo(key: "per_layer_input_gate") var perLayerInputGate: Linear
     @ModuleInfo(key: "per_layer_projection") var perLayerProjection: Linear
     @ModuleInfo(key: "post_per_layer_input_norm") var postPerLayerInputNorm: RMSNorm
@@ -481,10 +607,15 @@ final class Gemma4TextDecoderLayer: Module {
 
     init(_ config: Gemma4TextConfiguration, layerIndex: Int) {
         self.activationName = config.hiddenActivation
+        self.feedForwardPath = config.enableMoeBlock ? .mixtureOfExperts : .dense
         self.usesPerLayerInput = config.hiddenSizePerLayerInput > 0
 
         self._selfAttention.wrappedValue = Gemma4TextAttention(config, layerIndex: layerIndex)
         self._mlp.wrappedValue = Gemma4TextMLP(config, layerIndex: layerIndex)
+        if config.enableMoeBlock {
+            self._router.wrappedValue = Gemma4TextRouter(config)
+            self._experts.wrappedValue = Gemma4TextExperts(config)
+        }
         self._inputLayerNorm.wrappedValue = RMSNorm(dimensions: config.hiddenSize, eps: config.rmsNormEps)
         self._postAttentionLayerNorm.wrappedValue = RMSNorm(
             dimensions: config.hiddenSize,
@@ -498,6 +629,20 @@ final class Gemma4TextDecoderLayer: Module {
             dimensions: config.hiddenSize,
             eps: config.rmsNormEps
         )
+        if config.enableMoeBlock {
+            self._postFeedforwardLayerNorm1.wrappedValue = RMSNorm(
+                dimensions: config.hiddenSize,
+                eps: config.rmsNormEps
+            )
+            self._postFeedforwardLayerNorm2.wrappedValue = RMSNorm(
+                dimensions: config.hiddenSize,
+                eps: config.rmsNormEps
+            )
+            self._preFeedforwardLayerNorm2.wrappedValue = RMSNorm(
+                dimensions: config.hiddenSize,
+                eps: config.rmsNormEps
+            )
+        }
         self._perLayerInputGate.wrappedValue = Linear(
             config.hiddenSize,
             max(config.hiddenSizePerLayerInput, 1),
@@ -532,8 +677,13 @@ final class Gemma4TextDecoderLayer: Module {
         )
         hiddenStates = hiddenStates + postAttentionLayerNorm(attentionOutput)
 
-        let mlpOutput = mlp(preFeedforwardLayerNorm(hiddenStates))
-        hiddenStates = hiddenStates + postFeedforwardLayerNorm(mlpOutput)
+        let feedForwardResidual = hiddenStates
+        let feedForwardInput = preFeedforwardLayerNorm(feedForwardResidual)
+        let feedForwardOutput = applyFeedForward(
+            feedForwardInput,
+            residual: feedForwardResidual
+        )
+        hiddenStates = feedForwardResidual + postFeedforwardLayerNorm(feedForwardOutput)
 
         if usesPerLayerInput, let perLayerInput {
             let gated = Gemma4TextMath.activation(activationName, perLayerInputGate(hiddenStates))
@@ -542,6 +692,35 @@ final class Gemma4TextDecoderLayer: Module {
         }
 
         return hiddenStates * layerScalar.asType(hiddenStates.dtype)
+    }
+
+    private func applyFeedForward(_ hiddenStates: MLXArray, residual: MLXArray) -> MLXArray {
+        switch feedForwardPath {
+        case .dense:
+            return mlp(hiddenStates)
+        case .mixtureOfExperts:
+            guard
+                let router,
+                let experts,
+                let postFeedforwardLayerNorm1,
+                let postFeedforwardLayerNorm2,
+                let preFeedforwardLayerNorm2
+            else {
+                return mlp(hiddenStates)
+            }
+
+            let denseOutput = postFeedforwardLayerNorm1(mlp(hiddenStates))
+            let flattenedResidual = residual.reshaped(-1, residual.dim(-1))
+            let (_, topKWeights, topKIndex) = router(flattenedResidual)
+            let moeOutput = experts(
+                preFeedforwardLayerNorm2(flattenedResidual),
+                topKIndex: topKIndex,
+                topKWeights: topKWeights
+            )
+            .reshaped(residual.dim(0), residual.dim(1), residual.dim(2))
+
+            return denseOutput + postFeedforwardLayerNorm2(moeOutput)
+        }
     }
 }
 
