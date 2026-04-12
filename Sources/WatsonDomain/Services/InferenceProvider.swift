@@ -20,11 +20,22 @@ public enum InferenceProviderError: LocalizedError {
 public protocol InferenceProvider: Sendable {
     func supports(config: ModelConfiguration) -> Bool
     func loadModel(config: ModelConfiguration) async throws
+    func loadModel(
+        config: ModelConfiguration,
+        onStateChange: @Sendable @escaping (ModelLoadState) -> Void
+    ) async throws
     func generate(messages: [ChatMessage], options: GenerationOptions) async throws -> AsyncThrowingStream<String, Error>
     func unload() async
 }
 
 public extension InferenceProvider {
+    func loadModel(
+        config: ModelConfiguration,
+        onStateChange: @Sendable @escaping (ModelLoadState) -> Void
+    ) async throws {
+        try await loadModel(config: config)
+    }
+
     func generate(
         messages: [ChatMessage],
         maxTokens: Int

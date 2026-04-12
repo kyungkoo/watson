@@ -55,6 +55,13 @@ public actor MLXEngine {
     }
 
     public func loadModel(config: WatsonDomain.ModelConfiguration) async throws {
+        try await loadModel(config: config, onStateChange: { _ in })
+    }
+
+    public func loadModel(
+        config: WatsonDomain.ModelConfiguration,
+        onStateChange: @Sendable @escaping (ModelLoadState) -> Void
+    ) async throws {
         guard supports(config: config) else {
             throw MLXError.unsupportedConfiguration(config)
         }
@@ -66,7 +73,11 @@ public actor MLXEngine {
         stopTokenIDs = [1]
 
         do {
-            let preparedModel = try await modelLoader.prepareModel(modelID: modelID)
+            let preparedModel = try await modelLoader.prepareModel(
+                modelID: modelID,
+                onStateChange: onStateChange
+            )
+            onStateChange(.finalizing)
             let weights = try weightMapper.loadWeights(
                 from: preparedModel.modelDirectory,
                 strategy: preparedModel.loadingPlan.weightStrategy

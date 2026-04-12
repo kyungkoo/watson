@@ -21,11 +21,18 @@ public actor MLXNativeInferenceProvider: InferenceProvider {
     }
 
     public func loadModel(config: ModelConfiguration) async throws {
+        try await loadModel(config: config, onStateChange: { _ in })
+    }
+
+    public func loadModel(
+        config: ModelConfiguration,
+        onStateChange: @Sendable @escaping (ModelLoadState) -> Void
+    ) async throws {
         guard supports(config: config) else {
             throw InferenceProviderError.unsupportedConfiguration(config)
         }
 
-        try await engine.loadModel(config: config)
+        try await engine.loadModel(config: config, onStateChange: onStateChange)
         loadedConfiguration = config
     }
 

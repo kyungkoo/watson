@@ -4,6 +4,17 @@ import WatsonDomain
 
 @MainActor
 final class ChatViewModelTests: XCTestCase {
+    func test_init_defaultsToE4BAndDisablesAutoRouting() {
+        let provider = ScriptedInferenceProvider(tokens: ["ok"], tokenDelayNanos: 0)
+        let viewModel = ChatViewModel(
+            autoLoadInitialModel: false,
+            providerFactory: { _ in provider }
+        )
+
+        XCTAssertEqual(viewModel.currentModel, .gemma4_E4B)
+        XCTAssertFalse(viewModel.autoRoutingEnabled)
+    }
+
     func test_submitMessage_ignoresWhitespaceOnlyInput() async {
         let provider = ScriptedInferenceProvider(tokens: ["ok"], tokenDelayNanos: 0)
         let viewModel = ChatViewModel(
@@ -173,6 +184,135 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertEqual(state.loadCalls.first, .gemma4_E4B)
     }
 
+    func test_submitMessage_withE4B_usesSpeedTunedGenerationOptions() async throws {
+        let provider = ScriptedInferenceProvider(tokens: ["ok"], tokenDelayNanos: 0)
+        let viewModel = ChatViewModel(
+            initialModel: .gemma4_E4B,
+            autoLoadInitialModel: false,
+            providerFactory: { _ in provider }
+        )
+
+        await viewModel.switchModel(to: .gemma4_E4B)
+        viewModel.submitMessage("속도 개선 확인")
+
+        let finished = await waitUntil(timeout: 1.0) {
+            !viewModel.isGenerating && viewModel.messages.count == 2
+        }
+        XCTAssertTrue(finished)
+
+        let state = await provider.state()
+        let options = try XCTUnwrap(state.lastGenerationOptions)
+        XCTAssertEqual(options.maxTokens, 2_048)
+        XCTAssertEqual(options.promptOptions.contextBudgetCharacters, 10_000)
+        XCTAssertEqual(options.promptOptions.recentMessagesToKeep, 8)
+        XCTAssertEqual(options.promptOptions.summaryCharacterLimit, 400)
+        XCTAssertEqual(options.flushTokenThreshold, 4)
+        XCTAssertEqual(options.flushIntervalSeconds, 0.015, accuracy: 0.0001)
+    }
+
+    func test_selectModel_updatesStatusMessageFromDownloadProgressToFinalizing() async {
+        let provider = ScriptedInferenceProvider(
+            tokens: ["ok"],
+            tokenDelayNanos: 0,
+            loadScripts: [
+                .gemma4_E4B: .init(
+                    scheduledStates: [
+                        .init(delayNanos: 20_000_000, state: .downloading(percent: 42)),
+                        .init(delayNanos: 20_000_000, state: .finalizing),
+                    ],
+                    completionDelayNanos: 20_000_000
+                )
+            ]
+        )
+        let viewModel = ChatViewModel(
+            initialModel: .gemma4_E2B,
+            autoLoadInitialModel: false,
+            providerFactory: { _ in provider }
+        )
+
+        viewModel.selectModel(.gemma4_E4B)
+
+        let sawDownloading = await waitUntil(timeout: 1.0) {
+            viewModel.isModelLoading && viewModel.statusMessage == "Gemma 4 E4B 다운로드 42%"
+        }
+        XCTAssertTrue(sawDownloading)
+
+        let sawFinalizing = await waitUntil(timeout: 1.0) {
+            viewModel.isModelLoading && viewModel.statusMessage == "Gemma 4 E4B 적용 중..."
+        }
+        let loaded = await waitUntil(timeout: 1.0) {
+            !viewModel.isModelLoading && viewModel.statusMessage == "준비 완료"
+        }
+
+        XCTAssertTrue(sawFinalizing)
+        XCTAssertTrue(loaded)
+    }
+
+    func test_selectModel_withoutProgressStartsWithFinalizingStatus() async {
+        let provider = ScriptedInferenceProvider(tokens: ["ok"], tokenDelayNanos: 0, loadDelayNanos: 60_000_000)
+        let viewModel = ChatViewModel(
+            initialModel: .gemma4_E2B,
+            autoLoadInitialModel: false,
+            providerFactory: { _ in provider }
+        )
+
+        viewModel.selectModel(.gemma4_E4B)
+
+        let started = await waitUntil(timeout: 1.0) {
+            viewModel.isModelLoading && viewModel.statusMessage == "Gemma 4 E4B 적용 중..."
+        }
+        let loaded = await waitUntil(timeout: 1.0) {
+            !viewModel.isModelLoading && viewModel.statusMessage == "준비 완료"
+        }
+
+        XCTAssertTrue(started)
+        XCTAssertTrue(loaded)
+    }
+
+    func test_selectModel_ignoresStaleProgressAndCompletionFromCanceledLoad() async {
+        let provider = ScriptedInferenceProvider(
+            tokens: ["ok"],
+            tokenDelayNanos: 0,
+            loadScripts: [
+                .gemma4_E4B: .init(
+                    scheduledStates: [
+                        .init(delayNanos: 20_000_000, state: .downloading(percent: 25)),
+                        .init(delayNanos: 100_000_000, state: .finalizing),
+                    ],
+                    completionDelayNanos: 80_000_000
+                ),
+                .gemma4_E2B: .init(completionDelayNanos: 10_000_000)
+            ]
+        )
+        let viewModel = ChatViewModel(
+            initialModel: .gemma4_E2B,
+            autoLoadInitialModel: false,
+            providerFactory: { _ in provider }
+        )
+
+        viewModel.selectModel(.gemma4_E4B)
+
+        let sawFirstProgress = await waitUntil(timeout: 1.0) {
+            viewModel.statusMessage == "Gemma 4 E4B 다운로드 25%"
+        }
+        XCTAssertTrue(sawFirstProgress)
+
+        viewModel.selectModel(.gemma4_E2B)
+
+        let loadedReplacement = await waitUntil(timeout: 1.0) {
+            !viewModel.isModelLoading
+                && viewModel.currentModel == .gemma4_E2B
+                && viewModel.statusMessage == "준비 완료"
+        }
+        XCTAssertTrue(loadedReplacement)
+
+        try? await Task.sleep(nanoseconds: 250_000_000)
+
+        XCTAssertEqual(viewModel.currentModel, .gemma4_E2B)
+        XCTAssertEqual(viewModel.statusMessage, "준비 완료")
+        XCTAssertFalse(viewModel.isModelLoading)
+    }
+
     func test_autoRouting_switchesToE4BAfterHysteresisForComplexTurns() async {
         let provider = ScriptedInferenceProvider(tokens: ["ok"], tokenDelayNanos: 0)
         let policy = RoutingPolicy(
@@ -188,6 +328,7 @@ final class ChatViewModelTests: XCTestCase {
             providerFactory: { _ in provider }
         )
 
+        viewModel.autoRoutingEnabled = true
         await viewModel.switchModel(to: .gemma4_E2B)
 
         viewModel.submitMessage(String(repeating: "복잡", count: 12))
@@ -242,15 +383,23 @@ final class ChatViewModelTests: XCTestCase {
 private actor ScriptedInferenceProvider: InferenceProvider {
     private let tokens: [String]
     private let tokenDelayNanos: UInt64
-    private let loadDelayNanos: UInt64
+    private let defaultLoadScript: LoadScript
+    private let loadScripts: [ModelConfiguration: LoadScript]
 
     private(set) var loadCalls: [ModelConfiguration] = []
     private var loadedConfiguration: ModelConfiguration?
+    private var lastGenerationOptions: GenerationOptions?
 
-    init(tokens: [String], tokenDelayNanos: UInt64, loadDelayNanos: UInt64 = 0) {
+    init(
+        tokens: [String],
+        tokenDelayNanos: UInt64,
+        loadDelayNanos: UInt64 = 0,
+        loadScripts: [ModelConfiguration: LoadScript] = [:]
+    ) {
         self.tokens = tokens
         self.tokenDelayNanos = tokenDelayNanos
-        self.loadDelayNanos = loadDelayNanos
+        self.defaultLoadScript = LoadScript(completionDelayNanos: loadDelayNanos)
+        self.loadScripts = loadScripts
     }
 
     nonisolated func supports(config: ModelConfiguration) -> Bool {
@@ -258,9 +407,26 @@ private actor ScriptedInferenceProvider: InferenceProvider {
     }
 
     func loadModel(config: ModelConfiguration) async throws {
-        if loadDelayNanos > 0 {
-            try? await Task.sleep(nanoseconds: loadDelayNanos)
+        try await loadModel(config: config, onStateChange: { _ in })
+    }
+
+    func loadModel(
+        config: ModelConfiguration,
+        onStateChange: @Sendable @escaping (ModelLoadState) -> Void
+    ) async throws {
+        let script = loadScripts[config] ?? defaultLoadScript
+
+        for scheduledState in script.scheduledStates {
+            if scheduledState.delayNanos > 0 {
+                try? await Task.sleep(nanoseconds: scheduledState.delayNanos)
+            }
+            onStateChange(scheduledState.state)
         }
+
+        if script.completionDelayNanos > 0 {
+            try? await Task.sleep(nanoseconds: script.completionDelayNanos)
+        }
+
         loadCalls.append(config)
         loadedConfiguration = config
     }
@@ -272,6 +438,8 @@ private actor ScriptedInferenceProvider: InferenceProvider {
         guard loadedConfiguration != nil else {
             throw InferenceProviderError.modelNotLoaded
         }
+
+        lastGenerationOptions = options
 
         let scheduledTokens = Array(tokens.prefix(options.maxTokens))
         return AsyncThrowingStream { continuation in
@@ -297,12 +465,35 @@ private actor ScriptedInferenceProvider: InferenceProvider {
     }
 
     func state() -> State {
-        State(loadCalls: loadCalls, loadedConfiguration: loadedConfiguration)
+        State(
+            loadCalls: loadCalls,
+            loadedConfiguration: loadedConfiguration,
+            lastGenerationOptions: lastGenerationOptions
+        )
     }
 
     struct State: Sendable {
         let loadCalls: [ModelConfiguration]
         let loadedConfiguration: ModelConfiguration?
+        let lastGenerationOptions: GenerationOptions?
+    }
+
+    struct LoadScript: Sendable {
+        let scheduledStates: [ScheduledLoadState]
+        let completionDelayNanos: UInt64
+
+        init(
+            scheduledStates: [ScheduledLoadState] = [],
+            completionDelayNanos: UInt64 = 0
+        ) {
+            self.scheduledStates = scheduledStates
+            self.completionDelayNanos = completionDelayNanos
+        }
+    }
+
+    struct ScheduledLoadState: Sendable {
+        let delayNanos: UInt64
+        let state: ModelLoadState
     }
 }
 

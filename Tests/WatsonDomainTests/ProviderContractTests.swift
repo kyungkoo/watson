@@ -22,6 +22,10 @@ final class ProviderContractTests: XCTestCase {
         XCTAssertEqual(ModelConfiguration.gemma4_E2B.recommendedContextWindow, 131_072)
         XCTAssertEqual(ModelConfiguration.gemma4_E4B.recommendedContextWindow, 131_072)
         XCTAssertEqual(ModelConfiguration.gemma4_26B_A4B.recommendedContextWindow, 262_144)
+
+        XCTAssertEqual(ModelConfiguration.gemma4_E2B.maxTokens, 4_096)
+        XCTAssertEqual(ModelConfiguration.gemma4_E4B.maxTokens, 2_048)
+        XCTAssertEqual(ModelConfiguration.gemma4_26B_A4B.maxTokens, 8_192)
     }
 
     func test_availableModels_includesGemma426BA4BEntry() {
@@ -133,6 +137,30 @@ final class ProviderContractTests: XCTestCase {
             XCTFail("Expected modelNotLoaded after unload, got \(error)")
         }
     }
+
+    func test_progressAwareLoadModel_defaultImplementationDelegatesToLegacyLoadMethod() async throws {
+        let provider = LegacyOnlyMockInferenceProvider()
+        let configuration = ModelConfiguration(
+            id: "Fixture",
+            modelPathOrID: "local/fixture",
+            providerKind: .mlxNative,
+            format: .gemma4,
+            architecture: .dense,
+            quantizationHint: .none,
+            recommendedContextWindow: 131_072,
+            maxTokens: 3
+        )
+
+        let emittedStates = RecordedLoadStates()
+        try await provider.loadModel(config: configuration) { state in
+            emittedStates.append(state)
+        }
+
+        let state = await provider.state()
+        XCTAssertEqual(state.lifecycle, ["load"])
+        XCTAssertEqual(state.loadedConfiguration, configuration)
+        XCTAssertTrue(emittedStates.snapshot().isEmpty)
+    }
 }
 
 private actor MockInferenceProvider: InferenceProvider {
@@ -197,6 +225,68 @@ private actor MockInferenceProvider: InferenceProvider {
         let lastGeneratedMessages: [ChatMessage]
         let lastGeneratedMaxTokens: Int?
         let lastGenerationOptions: GenerationOptions?
+    }
+}
+
+private actor LegacyOnlyMockInferenceProvider: InferenceProvider {
+    private var lifecycle: [String] = []
+    private var loadedConfiguration: ModelConfiguration?
+
+    nonisolated func supports(config: ModelConfiguration) -> Bool {
+        config.providerKind == .mlxNative && config.format == .gemma4
+    }
+
+    func loadModel(config: ModelConfiguration) async throws {
+        guard supports(config: config) else {
+            throw InferenceProviderError.unsupportedConfiguration(config)
+        }
+
+        lifecycle.append("load")
+        loadedConfiguration = config
+    }
+
+    func generate(
+        messages: [ChatMessage],
+        options: GenerationOptions
+    ) async throws -> AsyncThrowingStream<String, Error> {
+        guard loadedConfiguration != nil else {
+            throw InferenceProviderError.modelNotLoaded
+        }
+
+        return AsyncThrowingStream { continuation in
+            continuation.finish()
+        }
+    }
+
+    func unload() async {
+        lifecycle.append("unload")
+        loadedConfiguration = nil
+    }
+
+    func state() -> State {
+        State(lifecycle: lifecycle, loadedConfiguration: loadedConfiguration)
+    }
+
+    struct State: Sendable {
+        let lifecycle: [String]
+        let loadedConfiguration: ModelConfiguration?
+    }
+}
+
+private final class RecordedLoadStates: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [ModelLoadState] = []
+
+    func append(_ state: ModelLoadState) {
+        lock.lock()
+        values.append(state)
+        lock.unlock()
+    }
+
+    func snapshot() -> [ModelLoadState] {
+        lock.lock()
+        defer { lock.unlock() }
+        return values
     }
 }
 

@@ -3,27 +3,43 @@ import WatsonDomain
 
 struct MessageBubbleView: View {
     let message: ChatMessage
-    
+
     var body: some View {
-        HStack {
-            if message.role == .user { Spacer() }
-            
+        HStack(alignment: .bottom, spacing: 8) {
+            if message.role == .user { Spacer(minLength: 48) }
+
             Text(message.content)
-                .padding(12)
+                .font(.body)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
                 .background(bubbleBackground)
-                .foregroundColor(message.role == .user ? .white : .primary)
-                .cornerRadius(12)
-                .textSelection(.enabled) 
-            
-            if message.role == .assistant || message.role == .system { Spacer() }
+                .foregroundStyle(textColor)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .textSelection(.enabled)
+                .frame(maxWidth: 720, alignment: message.role == .user ? .trailing : .leading)
+
+            if message.role != .user { Spacer(minLength: 48) }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var bubbleBackground: some ShapeStyle {
+        switch message.role {
+        case .user:
+            return AnyShapeStyle(.blue)
+        case .assistant:
+            return AnyShapeStyle(Color(nsColor: .controlBackgroundColor))
+        case .system:
+            return AnyShapeStyle(.orange.opacity(0.15))
         }
     }
-    
-    private var bubbleBackground: Color {
+
+    private var textColor: Color {
         switch message.role {
-        case .user: return .blue.opacity(0.8)
-        case .assistant: return .gray.opacity(0.2)
-        case .system: return .orange.opacity(0.1)
+        case .user:
+            return .white
+        case .assistant, .system:
+            return .primary
         }
     }
 }
@@ -31,15 +47,21 @@ struct MessageBubbleView: View {
 struct AssistantTypingIndicatorBubbleView: View {
     var body: some View {
         HStack {
-            ProgressView()
-                .controlSize(.small)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
-                .background(.gray.opacity(0.2))
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .accessibilityLabel("응답 생성 중")
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("답변 작성 중...")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .background(Color(nsColor: .controlBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .accessibilityLabel("응답 생성 중")
 
-            Spacer()
+            Spacer(minLength: 48)
         }
+        .frame(maxWidth: .infinity)
     }
 }

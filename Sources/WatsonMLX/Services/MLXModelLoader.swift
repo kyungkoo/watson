@@ -2,6 +2,7 @@ import Foundation
 import MLXLMHFAPI
 import MLXLMCommon
 import MLXLMTokenizers
+import WatsonDomain
 
 internal enum MLXWeightLoadingStrategy {
     case gemma4TextOnly
@@ -20,9 +21,13 @@ internal struct MLXPreparedModel {
 }
 
 internal struct MLXModelLoader {
-    func prepareModel(modelID: String) async throws -> MLXPreparedModel {
+    func prepareModel(
+        modelID: String,
+        onStateChange: @Sendable @escaping (ModelLoadState) -> Void = { _ in }
+    ) async throws -> MLXPreparedModel {
         print("[\(modelID)] 가중치 및 설정 다운로드 중...")
         let hub = HubClient.default
+        let progressRelay = DownloadProgressRelay(onStateChange: onStateChange)
 
         let modelDirectory = try await hub.download(
             id: modelID,
@@ -30,7 +35,10 @@ internal struct MLXModelLoader {
             matching: ["*.json", "*.safetensors", "*.model"],
             useLatest: false,
             progressHandler: { progress in
-                print("다운로드 진행: \(Int(progress.fractionCompleted * 100))%")
+                let percent = progressRelay.report(progress)
+                if let percent {
+                    print("다운로드 진행: \(percent)%")
+                }
             }
         )
 
@@ -143,5 +151,30 @@ internal struct MLXModelLoader {
         }
 
         return nil
+    }
+}
+
+private final class DownloadProgressRelay: @unchecked Sendable {
+    private let lock = NSLock()
+    private let onStateChange: @Sendable (ModelLoadState) -> Void
+    private var lastReportedPercent: Int?
+
+    init(onStateChange: @escaping @Sendable (ModelLoadState) -> Void) {
+        self.onStateChange = onStateChange
+    }
+
+    func report(_ progress: Progress) -> Int? {
+        let percent = min(100, max(0, Int(progress.fractionCompleted * 100)))
+
+        lock.lock()
+        guard percent != lastReportedPercent else {
+            lock.unlock()
+            return nil
+        }
+        lastReportedPercent = percent
+        lock.unlock()
+
+        onStateChange(.downloading(percent: percent))
+        return percent
     }
 }

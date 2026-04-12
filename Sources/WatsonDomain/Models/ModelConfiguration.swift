@@ -69,7 +69,7 @@ public struct ModelConfiguration: Identifiable, Sendable, Hashable {
         architecture: .dense,
         quantizationHint: .none,
         recommendedContextWindow: 131_072,
-        maxTokens: 8192
+        maxTokens: 2_048
     )
 
     public static let gemma4_26B_A4B = ModelConfiguration(

@@ -11,7 +11,7 @@ public final class ChatViewModel {
     public var isAwaitingAssistantResponse: Bool = false
     public var currentModel: ModelConfiguration = .gemma4_E2B
     public var statusMessage: String = ""
-    public var autoRoutingEnabled: Bool = true
+    public var autoRoutingEnabled: Bool = false
     public var routingLock: ModelRoutingLock = .none
 
     public var isBusy: Bool { isGenerating || isModelLoading }
@@ -26,11 +26,12 @@ public final class ChatViewModel {
     private var provider: any InferenceProvider
     private var generationTask: Task<Void, Never>?
     private var modelSwitchTask: Task<Void, Never>?
+    private var activeLoadSessionID = UUID()
     private var routingStreakTarget: ModelConfiguration?
     private var routingStreakCount: Int = 0
 
     public init(
-        initialModel: ModelConfiguration = .gemma4_E2B,
+        initialModel: ModelConfiguration = .gemma4_E4B,
         autoLoadInitialModel: Bool = true,
         routingPolicy: RoutingPolicy = .balanced,
         providerFactory: @escaping (ProviderKind) -> any InferenceProvider
@@ -50,9 +51,11 @@ public final class ChatViewModel {
         generationTask?.cancel()
         modelSwitchTask?.cancel()
         resetRoutingHysteresis()
+        let loadSessionID = UUID()
+        activeLoadSessionID = loadSessionID
         modelSwitchTask = Task { [weak self] in
             guard let self else { return }
-            await self.switchModel(to: config)
+            await self.switchModel(to: config, sessionID: loadSessionID)
             await MainActor.run {
                 self.modelSwitchTask = nil
             }
@@ -60,23 +63,40 @@ public final class ChatViewModel {
     }
 
     public func switchModel(to config: ModelConfiguration) async {
+        let loadSessionID = UUID()
+        activeLoadSessionID = loadSessionID
+        await switchModel(to: config, sessionID: loadSessionID)
+    }
+
+    private func switchModel(to config: ModelConfiguration, sessionID: UUID) async {
         self.currentModel = config
         self.isModelLoading = true
-        self.statusMessage = "\(config.id) 로드 중..."
+        self.statusMessage = "\(config.id) 적용 중..."
 
         defer {
-            self.isModelLoading = false
+            if isActiveLoadSession(sessionID) {
+                self.isModelLoading = false
+            }
         }
 
         do {
             await configureProviderIfNeeded(for: config)
+            guard isActiveLoadSession(sessionID) else { return }
             guard provider.supports(config: config) else {
                 throw InferenceProviderError.unsupportedConfiguration(config)
             }
 
-            try await provider.loadModel(config: config)
+            try await provider.loadModel(config: config) { [weak self] state in
+                Task { @MainActor [weak self] in
+                    guard let self, self.isActiveLoadSession(sessionID) else { return }
+                    self.statusMessage = self.statusMessage(for: state, config: config)
+                }
+            }
+            guard isActiveLoadSession(sessionID) else { return }
             self.statusMessage = "준비 완료"
+        } catch is CancellationError {
         } catch {
+            guard isActiveLoadSession(sessionID) else { return }
             self.statusMessage = "로드 실패: \(error.localizedDescription)"
         }
     }
@@ -233,11 +253,24 @@ public final class ChatViewModel {
         routingStreakCount = 0
     }
 
+    private func isActiveLoadSession(_ sessionID: UUID) -> Bool {
+        activeLoadSessionID == sessionID
+    }
+
+    private func statusMessage(for state: ModelLoadState, config: ModelConfiguration) -> String {
+        switch state {
+        case .downloading(let percent):
+            return "\(config.id) 다운로드 \(percent)%"
+        case .finalizing:
+            return "\(config.id) 적용 중..."
+        }
+    }
+
     private func buildGenerationOptions(for model: ModelConfiguration) -> GenerationOptions {
         let promptOptions = PromptFormatter.GemmaOptions(
             contextBudgetCharacters: contextBudget(for: model),
-            recentMessagesToKeep: model == .gemma4_E2B ? 6 : 10,
-            summaryCharacterLimit: model == .gemma4_E2B ? 320 : 560
+            recentMessagesToKeep: model == .gemma4_E2B ? 6 : 8,
+            summaryCharacterLimit: model == .gemma4_E2B ? 320 : 400
         )
 
         return GenerationOptions(
@@ -245,8 +278,8 @@ public final class ChatViewModel {
             temperature: 0.0,
             topP: 1.0,
             repetitionPenalty: 1.0,
-            flushIntervalSeconds: model == .gemma4_E2B ? 0.025 : 0.035,
-            flushTokenThreshold: model == .gemma4_E2B ? 6 : 10,
+            flushIntervalSeconds: model == .gemma4_E2B ? 0.025 : 0.015,
+            flushTokenThreshold: model == .gemma4_E2B ? 6 : 4,
             promptOptions: promptOptions
         )
     }
@@ -256,7 +289,7 @@ public final class ChatViewModel {
         case ModelConfiguration.gemma4_E2B.id:
             return 8_000
         case ModelConfiguration.gemma4_E4B.id:
-            return 14_000
+            return 10_000
         default:
             return 18_000
         }
