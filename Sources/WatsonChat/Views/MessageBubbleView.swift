@@ -2,6 +2,12 @@ import SwiftUI
 import WatsonDomain
 
 struct MessageBubbleView: View {
+    private static let copilotAutopilotBubbleGreen = Color(
+        red: 150.0 / 255.0,
+        green: 224.0 / 255.0,
+        blue: 216.0 / 255.0
+    )
+
     let message: ChatMessage
 
     var body: some View {
@@ -28,7 +34,7 @@ struct MessageBubbleView: View {
         case .user:
             return AnyShapeStyle(.blue)
         case .assistant:
-            return AnyShapeStyle(Color(nsColor: .controlBackgroundColor))
+            return AnyShapeStyle(Self.copilotAutopilotBubbleGreen)
         case .system:
             return AnyShapeStyle(.orange.opacity(0.15))
         }
