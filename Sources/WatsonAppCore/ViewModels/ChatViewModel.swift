@@ -5,6 +5,11 @@ import WatsonDomain
 @MainActor
 @Observable
 public final class ChatViewModel {
+    private enum E4BResponseProfile {
+        case fast
+        case rich
+    }
+
     public var messages: [ChatMessage] = []
     public var isGenerating: Bool = false
     public var isModelLoading: Bool = false
@@ -145,7 +150,7 @@ public final class ChatViewModel {
         }
 
         do {
-            let generationOptions = buildGenerationOptions(for: currentModel)
+            let generationOptions = buildGenerationOptions(for: currentModel, userText: trimmedText)
             let stream = try await provider.generate(
                 messages: messages,
                 options: generationOptions
@@ -266,33 +271,110 @@ public final class ChatViewModel {
         }
     }
 
-    private func buildGenerationOptions(for model: ModelConfiguration) -> GenerationOptions {
-        let promptOptions = PromptFormatter.GemmaOptions(
-            contextBudgetCharacters: contextBudget(for: model),
-            recentMessagesToKeep: model == .gemma4_E2B ? 6 : 8,
-            summaryCharacterLimit: model == .gemma4_E2B ? 320 : 400
-        )
+    private func buildGenerationOptions(for model: ModelConfiguration, userText: String) -> GenerationOptions {
+        if model == .gemma4_E2B {
+            let promptOptions = PromptFormatter.GemmaOptions(
+                contextBudgetCharacters: 8_000,
+                recentMessagesToKeep: 6,
+                summaryCharacterLimit: 320
+            )
+            return GenerationOptions(
+                maxTokens: model.maxTokens,
+                temperature: 0.0,
+                topP: 1.0,
+                repetitionPenalty: 1.0,
+                flushIntervalSeconds: 0.025,
+                flushTokenThreshold: 6,
+                promptOptions: promptOptions
+            )
+        }
 
+        if model == .gemma4_E4B {
+            let profile = e4bResponseProfile(for: userText)
+            let promptOptions = PromptFormatter.GemmaOptions(
+                defaultSystemInstruction: e4bSystemInstruction(for: profile),
+                contextBudgetCharacters: contextBudget(for: model, profile: profile),
+                recentMessagesToKeep: profile == .fast ? 8 : 10,
+                summaryCharacterLimit: profile == .fast ? 400 : 640
+            )
+
+            return GenerationOptions(
+                maxTokens: model.maxTokens,
+                temperature: profile == .fast ? 0.0 : 0.25,
+                topP: profile == .fast ? 1.0 : 0.92,
+                repetitionPenalty: profile == .fast ? 1.0 : 1.08,
+                flushIntervalSeconds: profile == .fast ? 0.015 : 0.012,
+                flushTokenThreshold: profile == .fast ? 4 : 3,
+                promptOptions: promptOptions
+            )
+        }
+
+        let promptOptions = PromptFormatter.GemmaOptions(
+            contextBudgetCharacters: contextBudget(for: model, profile: nil),
+            recentMessagesToKeep: 8,
+            summaryCharacterLimit: 400
+        )
         return GenerationOptions(
             maxTokens: model.maxTokens,
             temperature: 0.0,
             topP: 1.0,
             repetitionPenalty: 1.0,
-            flushIntervalSeconds: model == .gemma4_E2B ? 0.025 : 0.015,
-            flushTokenThreshold: model == .gemma4_E2B ? 6 : 4,
+            flushIntervalSeconds: 0.015,
+            flushTokenThreshold: 4,
             promptOptions: promptOptions
         )
     }
 
-    private func contextBudget(for model: ModelConfiguration) -> Int {
+    private func contextBudget(for model: ModelConfiguration, profile: E4BResponseProfile?) -> Int {
         switch model.id {
         case ModelConfiguration.gemma4_E2B.id:
             return 8_000
         case ModelConfiguration.gemma4_E4B.id:
-            return 10_000
+            return profile == .rich ? 18_000 : 10_000
         default:
             return 18_000
         }
+    }
+
+    private func e4bResponseProfile(for text: String) -> E4BResponseProfile {
+        let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return .fast }
+
+        if normalized.count >= 120 || normalized.filter({ $0.isNewline }).count >= 2 {
+            return .rich
+        }
+
+        let lowercased = normalized.lowercased()
+        let richerIntentKeywords = [
+            "비교", "설명", "이유", "왜", "어떻게", "방법", "전략", "아이디어", "브레인스토밍",
+            "장단점", "예시", "예제", "계획", "설계", "분석", "정리", "추천", "검토", "개선",
+            "trade-off", "tradeoff", "compare", "comparison", "explain", "reason", "why",
+            "how", "brainstorm", "idea", "ideas", "pros", "cons", "example", "plan",
+            "design", "analysis", "recommend", "review", "improve", "strategy"
+        ]
+        if richerIntentKeywords.contains(where: { lowercased.contains($0) }) {
+            return .rich
+        }
+
+        if normalized.hasSuffix("?") && normalized.count <= 36 {
+            return .fast
+        }
+
+        return normalized.count >= 60 ? .rich : .fast
+    }
+
+    private func e4bSystemInstruction(for profile: E4BResponseProfile) -> String {
+        let baseInstruction = PromptFormatter.GemmaOptions.default.defaultSystemInstruction
+        guard profile == .rich else {
+            return baseInstruction
+        }
+
+        return [
+            baseInstruction,
+            "- 설명형 요청에서는 핵심 결론을 먼저 제시한 뒤 이유와 예시를 덧붙이세요.",
+            "- 비교형 요청에서는 차이점, 장단점, trade-off를 함께 정리하세요.",
+            "- 사용자가 짧은 답을 요구하지 않는 한 성급하게 끊지 말고 완결된 답변을 제공하세요."
+        ].joined(separator: "\n")
     }
 
     private func quickReplyForSimpleArithmetic(in text: String) -> String? {

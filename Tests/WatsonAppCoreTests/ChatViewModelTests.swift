@@ -184,7 +184,7 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertEqual(state.loadCalls.first, .gemma4_E4B)
     }
 
-    func test_submitMessage_withE4B_usesSpeedTunedGenerationOptions() async throws {
+    func test_submitMessage_withE4B_shortQuestion_usesFastGenerationOptions() async throws {
         let provider = ScriptedInferenceProvider(tokens: ["ok"], tokenDelayNanos: 0)
         let viewModel = ChatViewModel(
             initialModel: .gemma4_E4B,
@@ -193,7 +193,7 @@ final class ChatViewModelTests: XCTestCase {
         )
 
         await viewModel.switchModel(to: .gemma4_E4B)
-        viewModel.submitMessage("속도 개선 확인")
+        viewModel.submitMessage("서울은 수도야?")
 
         let finished = await waitUntil(timeout: 1.0) {
             !viewModel.isGenerating && viewModel.messages.count == 2
@@ -203,11 +203,45 @@ final class ChatViewModelTests: XCTestCase {
         let state = await provider.state()
         let options = try XCTUnwrap(state.lastGenerationOptions)
         XCTAssertEqual(options.maxTokens, 2_048)
+        XCTAssertEqual(options.temperature, 0.0, accuracy: 0.0001)
+        XCTAssertEqual(options.topP, 1.0, accuracy: 0.0001)
+        XCTAssertEqual(options.repetitionPenalty, 1.0, accuracy: 0.0001)
         XCTAssertEqual(options.promptOptions.contextBudgetCharacters, 10_000)
         XCTAssertEqual(options.promptOptions.recentMessagesToKeep, 8)
         XCTAssertEqual(options.promptOptions.summaryCharacterLimit, 400)
         XCTAssertEqual(options.flushTokenThreshold, 4)
         XCTAssertEqual(options.flushIntervalSeconds, 0.015, accuracy: 0.0001)
+    }
+
+    func test_submitMessage_withE4B_openEndedRequest_usesRicherGenerationOptions() async throws {
+        let provider = ScriptedInferenceProvider(tokens: ["ok"], tokenDelayNanos: 0)
+        let viewModel = ChatViewModel(
+            initialModel: .gemma4_E4B,
+            autoLoadInitialModel: false,
+            providerFactory: { _ in provider }
+        )
+
+        await viewModel.switchModel(to: .gemma4_E4B)
+        viewModel.submitMessage("SwiftUI와 AppKit을 비교해서 장단점과 예시를 함께 설명해줘")
+
+        let finished = await waitUntil(timeout: 1.0) {
+            !viewModel.isGenerating && viewModel.messages.count == 2
+        }
+        XCTAssertTrue(finished)
+
+        let state = await provider.state()
+        let options = try XCTUnwrap(state.lastGenerationOptions)
+        XCTAssertEqual(options.maxTokens, 2_048)
+        XCTAssertEqual(options.temperature, 0.25, accuracy: 0.0001)
+        XCTAssertEqual(options.topP, 0.92, accuracy: 0.0001)
+        XCTAssertEqual(options.repetitionPenalty, 1.08, accuracy: 0.0001)
+        XCTAssertEqual(options.promptOptions.contextBudgetCharacters, 18_000)
+        XCTAssertEqual(options.promptOptions.recentMessagesToKeep, 10)
+        XCTAssertEqual(options.promptOptions.summaryCharacterLimit, 640)
+        XCTAssertEqual(options.flushTokenThreshold, 3)
+        XCTAssertEqual(options.flushIntervalSeconds, 0.012, accuracy: 0.0001)
+        XCTAssertTrue(options.promptOptions.defaultSystemInstruction.contains("이유와 예시"))
+        XCTAssertTrue(options.promptOptions.defaultSystemInstruction.contains("trade-off"))
     }
 
     func test_selectModel_updatesStatusMessageFromDownloadProgressToFinalizing() async {

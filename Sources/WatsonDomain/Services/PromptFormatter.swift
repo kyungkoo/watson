@@ -15,6 +15,7 @@ public struct PromptFormatter: Sendable {
             - 사용자의 요구사항을 누락하지 마세요.
             - 출력 형식/제약 조건이 있으면 우선 준수하세요.
             - 질문이 명확한 경우(예: 단순 산술)는 확인 질문 없이 바로 간결하게 답하세요.
+            - 설명이나 비교를 요청받으면 결론만 짧게 말하지 말고 이유, 예시, 대안을 함께 제시하세요.
             - 확실하지 않은 내용은 추측하지 말고 불확실성을 명시하세요.
             """,
             contextBudgetCharacters: Int = 12_000,
@@ -124,24 +125,48 @@ public struct PromptFormatter: Sendable {
 
         var lines: [String] = ["[대화 요약]"]
         var usedCharacters = lines[0].count
-        let maxLineCharacters = 100
+        let maxLineCharacters = 60
 
-        for message in messages {
-            let roleLabel: String = (message.role == .assistant) ? "assistant" : "user"
-            let normalizedText = message.content
-                .replacingOccurrences(of: "\n", with: " ")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !normalizedText.isEmpty else { continue }
+        let userContext = summaryEntries(
+            from: messages,
+            role: .user,
+            maxEntries: 1,
+            maxLineCharacters: maxLineCharacters
+        )
+        let assistantContext = summaryEntries(
+            from: messages,
+            role: .assistant,
+            maxEntries: 1,
+            maxLineCharacters: maxLineCharacters
+        )
+        let pendingUserRequest = latestPendingUserRequest(
+            in: messages,
+            maxLineCharacters: maxLineCharacters
+        )
 
-            let clippedText = String(normalizedText.prefix(maxLineCharacters))
-            let suffix = normalizedText.count > maxLineCharacters ? "…" : ""
-            let line = "- \(roleLabel): \(clippedText)\(suffix)"
+        appendSection(
+            title: "사용자 맥락:",
+            entries: userContext,
+            lines: &lines,
+            usedCharacters: &usedCharacters,
+            summaryCharacterLimit: summaryCharacterLimit
+        )
+        appendSection(
+            title: "이미 도출된 내용:",
+            entries: assistantContext,
+            lines: &lines,
+            usedCharacters: &usedCharacters,
+            summaryCharacterLimit: summaryCharacterLimit
+        )
 
-            if usedCharacters + line.count > summaryCharacterLimit {
-                break
-            }
-            lines.append(line)
-            usedCharacters += line.count
+        if let pendingUserRequest, userContext.last != pendingUserRequest {
+            appendSection(
+                title: "남아 있는 사용자 요청:",
+                entries: [pendingUserRequest],
+                lines: &lines,
+                usedCharacters: &usedCharacters,
+                summaryCharacterLimit: summaryCharacterLimit
+            )
         }
 
         if lines.count == 1 {
@@ -149,6 +174,92 @@ public struct PromptFormatter: Sendable {
         }
 
         return ChatMessage(role: .system, content: lines.joined(separator: "\n"))
+    }
+
+    private static func summaryEntries(
+        from messages: [ChatMessage],
+        role: ChatMessage.Role,
+        maxEntries: Int,
+        maxLineCharacters: Int
+    ) -> [String] {
+        messages
+            .filter { $0.role == role }
+            .suffix(maxEntries)
+            .compactMap { clippedSummaryLine(from: $0.content, maxLineCharacters: maxLineCharacters) }
+    }
+
+    private static func latestPendingUserRequest(
+        in messages: [ChatMessage],
+        maxLineCharacters: Int
+    ) -> String? {
+        guard messages.last?.role == .user else {
+            return nil
+        }
+
+        return clippedSummaryLine(
+            from: messages.last?.content ?? "",
+            maxLineCharacters: maxLineCharacters
+        )
+    }
+
+    private static func clippedSummaryLine(
+        from text: String,
+        maxLineCharacters: Int
+    ) -> String? {
+        let normalizedText = text
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedText.isEmpty else { return nil }
+
+        let clippedText = String(normalizedText.prefix(maxLineCharacters))
+        let suffix = normalizedText.count > maxLineCharacters ? "…" : ""
+        return "- \(clippedText)\(suffix)"
+    }
+
+    private static func appendSection(
+        title: String,
+        entries: [String],
+        lines: inout [String],
+        usedCharacters: inout Int,
+        summaryCharacterLimit: Int
+    ) {
+        guard !entries.isEmpty else { return }
+        guard appendSummaryLine(
+            title,
+            lines: &lines,
+            usedCharacters: &usedCharacters,
+            summaryCharacterLimit: summaryCharacterLimit
+        ) else {
+            return
+        }
+
+        for entry in entries {
+            guard appendSummaryLine(
+                entry,
+                lines: &lines,
+                usedCharacters: &usedCharacters,
+                summaryCharacterLimit: summaryCharacterLimit
+            ) else {
+                break
+            }
+        }
+    }
+
+    @discardableResult
+    private static func appendSummaryLine(
+        _ line: String,
+        lines: inout [String],
+        usedCharacters: inout Int,
+        summaryCharacterLimit: Int
+    ) -> Bool {
+        let projectedCharacters = usedCharacters + line.count + 1
+        guard projectedCharacters <= summaryCharacterLimit else {
+            return false
+        }
+
+        lines.append(line)
+        usedCharacters = projectedCharacters
+        return true
     }
 
     private static func totalCharacters(in messages: [ChatMessage]) -> Int {

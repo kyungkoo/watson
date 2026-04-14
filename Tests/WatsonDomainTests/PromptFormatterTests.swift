@@ -59,7 +59,7 @@ final class PromptFormatterTests: XCTestCase {
         XCTAssertTrue(prompt.hasSuffix("<|turn>model\n"))
     }
 
-    func test_defaultSystemInstruction_includesDirectAnswerGuidanceForClearQuestions() {
+    func test_defaultSystemInstruction_includesDirectAnswerAndRichResponseGuidance() {
         let prompt = PromptFormatter.formatGemma(
             messages: [
                 ChatMessage(role: .user, content: "10 - 10 = ?")
@@ -67,6 +67,7 @@ final class PromptFormatterTests: XCTestCase {
         )
 
         XCTAssertTrue(prompt.contains("질문이 명확한 경우(예: 단순 산술)는 확인 질문 없이 바로 간결하게 답하세요."))
+        XCTAssertTrue(prompt.contains("설명이나 비교를 요청받으면 결론만 짧게 말하지 말고 이유, 예시, 대안을 함께 제시하세요."))
     }
 
     func test_longConversation_appliesContextCompressionWithSummary() {
@@ -95,7 +96,33 @@ final class PromptFormatterTests: XCTestCase {
         let prompt = PromptFormatter.formatGemma(messages: messages, options: options)
 
         XCTAssertTrue(prompt.contains("[대화 요약]"))
+        XCTAssertTrue(prompt.contains("사용자 맥락:"))
         XCTAssertTrue(prompt.contains(newUser))
         XCTAssertFalse(prompt.contains(oldUser + oldUser))
+    }
+
+    func test_summaryMessage_usesStructuredSectionsWhenBudgetAllows() {
+        let oldUser = String(repeating: "오래된 요구사항 ", count: 40)
+        let oldAssistant = String(repeating: "기존 응답 요약 ", count: 40)
+        let messages: [ChatMessage] = [
+            ChatMessage(role: .user, content: oldUser),
+            ChatMessage(role: .assistant, content: oldAssistant),
+            ChatMessage(role: .user, content: oldUser),
+            ChatMessage(role: .assistant, content: "좋아"),
+            ChatMessage(role: .user, content: "추천")
+        ]
+
+        let options = PromptFormatter.GemmaOptions(
+            defaultSystemInstruction: "지시를 정확히 따르세요.",
+            contextBudgetCharacters: 512,
+            recentMessagesToKeep: 2,
+            summaryCharacterLimit: 280
+        )
+
+        let prompt = PromptFormatter.formatGemma(messages: messages, options: options)
+
+        XCTAssertTrue(prompt.contains("[대화 요약]"))
+        XCTAssertTrue(prompt.contains("사용자 맥락:"))
+        XCTAssertTrue(prompt.contains("이미 도출된 내용:"))
     }
 }
